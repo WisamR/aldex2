@@ -1,0 +1,219 @@
+---
+title: 'Analysis Of Differential Abundance Taking Sample Variation Into
+Account'
+author: "Wisam"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+      toc: true
+      toc_depth: 4
+      toc_float: true
+      code_download: true
+---
+
+# Installing ALDEx2
+ALDEx2 is a bioconductor package that could be installed Via bioconductor
+
+
+```{r install_bioc, echo=TRUE}
+library(BiocManager)
+#BiocManager::install('ALDEx2')
+
+```
+
+```{r phyloseq, echo=FALSE, message=FALSE, error=FALSE, warning=FALSE}
+library(knitr)
+library(phyloseq)
+library(ALDEx2)
+library(vegan)
+library(ggplot2)
+library(tictoc)
+library(magrittr)
+library(tidyverse)
+library(tidyr)
+options(max.print="75")
+  knitr::opts_chunk$set(fig.width=8,
+                        fig.height=6,
+                        eval=TRUE,
+                        cache=TRUE,
+                        echo=TRUE,
+                        prompt=FALSE,
+                        tidy=TRUE,
+                        comment=NA,
+                        message=FALSE,
+                        warning=FALSE)
+opts_knit$set(width=75)
+```
+
+# ALDEx2 tutorials
+### Main tutorial
+
+[Click](https://www.bioconductor.org/packages/release/bioc/manuals/ALDEx2/man/ALDEx2.pdf)
+
+### ALDEx2 uses non-parametric statistical modeling
+
+[Click](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6052553/pdf/12859_2018_Article_2261.pdf)
+
+
+### Useful book
+
+[Statistical Analysis of Microbiome Data with R](https://link.springer.com/book/10.1007/978-981-13-1534-3)
+
+
+
+
+
+# Working with ALDEx2
+
+### Dataset dietswap
+
+* **Phyloseq dataset**
+From microbiome package [dietswap](https://www.nature.com/articles/ncomms7342)
+
+```{r data, echo=T, message=FALSE, error=FALSE}
+library(microbiome)
+data("dietswap")
+dietswap
+
+```
+
+
+
+
+```{r aldex2, message=FALSE, echo=FALSE, warning=FALSE}
+abund_table<- otu_table(dietswap)@.Data
+abund_table_t<-t(abund_table)
+```
+
+* check the number of genera `r ncol(abund_table_t)`
+* check the number of samples `r nrow(abund_table_t)`
+
+```{r aldex2_start, message=FALSE, echo=FALSE, warning=FALSE, results='hide'}
+metadata<-get_variable(dietswap)
+metadata$nationality<- factor(metadata$nationality, levels = c('AAM', 'AFR'))
+groups <- c(rep('AAM', nrow(subset(metadata, nationality=='AAM'))), 
+            rep('AFR', nrow(subset(metadata, nationality=='AFR'))))
+```
+
+* The **two groups of interest** in our Aldex2 analysis are:
+
+* AAM, it means African American
+
+* AFR, it means African
+
+* The whole variables of dietswap dataset are: `r sample_variables(dietswap)`
+
+### Main tests
+
+
+
+```{r aldex2_main_test, message=FALSE, echo=FALSE, warning=FALSE, results='hide'}
+vdr <- aldex.clr(abund_table, conds = groups, mc.samples=128, verbose=TRUE)
+vdr_t_test <- aldex.ttest(vdr,groups, paired.test=FALSE)
+vdr_kw_test <- aldex.kw(vdr)
+vdr_effect <- aldex.effect(vdr, groups, include.sample.summary=FALSE, verbose=FALSE)
+```
+
+
+
+
+#### **t-test** 
+
+T-test between groups where wi.eBH<= 0.05 and we.eBH <= 0.05. The first tens only.
+
+```{r aldex2_t_test, message=FALSE, echo=FALSE, warning=FALSE}
+library(knitr)
+t<-vdr_t_test %>% select(wi.eBH, we.eBH) %>% 
+  filter(wi.eBH<= 0.05 & we.eBH <= 0.05)
+kable(head(t, 10))
+#kable(vdr_t_test)
+```
+
+#### **Kruskal-Wallis test** 
+Kruskal-Wallis test between groups where kw.eBH <=0.05. The first tens only.
+
+```{r aldex2_kw_test, message=FALSE, echo=FALSE, warning=FALSE}
+k<-vdr_kw_test %>% select(kw.eBH, kw.ep) %>% 
+  filter(kw.eBH <=0.05)
+
+kable(head(k, 10))
+
+```
+
+#### **Estimate Effect Size** 
+
+Estimate Effect Size between groups where the effect > 0.1 or the effect < -0.1, the first tens only.
+
+
+```{r aldex2_effect_size, message=FALSE, echo=FALSE, warning=FALSE}
+gh<- subset(vdr_effect, effect > 0.1 | effect < -0.1)
+
+
+kable(head(gh, 10))
+
+```
+
+
+#### Summary
+
+The first 15 only.
+
+```{r aldex2_dataFrame, message=FALSE, echo=FALSE, warning=FALSE}
+vdr_all <- data.frame(vdr_t_test, vdr_kw_test, vdr_effect)
+sig_by_both <- which(vdr_all$we.ep < 0.05 & vdr_all$wi.ep < 0.05)
+sig_by_both_fdr <- which(vdr_all$we.eBH < 0.05 & vdr_all$wi.eBH < 0.05)
+library(xtable)
+table <-xtable(vdr_all[sig_by_both,c (12:15,1,3,2,4)], digits=3, align=c("l",rep("r",8) ))
+#print.xtable(table, type="html", file="Vdr_Table.html")
+kable(head(table, 15))
+```
+
+
+### ALDEx2 Wrapper
+
+The first 15 only.
+
+```{r aldex2_wrapper, message=FALSE, echo=FALSE, warning=FALSE}
+vdr_w <- aldex(abund_table, groups, mc.samples=128, test="t", effect=TRUE, include.sample.summary=FALSE, denom="iqlr", verbose=FALSE)
+kable(head(vdr_w, 15))
+```
+
+
+
+# Plots 
+
+### Bland-Altman plot
+
+
+```{r aldex2_Bland, message=FALSE, echo=FALSE, warning=FALSE}
+aldex.plot(vdr_all, type="MA", test="welch", cutoff=0.05, all.cex=0.7, called.cex=1.1,rare.col="grey", called.col="red")
+
+#Effect Size and Effect Plot
+
+```
+
+
+* Red taxa are the significant ones with adjusted p-values cutoff 0.05 or less.
+
+* Grey taxa are the rare ones
+
+### Median plots  
+
+Plot median between-group difference Versus median within-group difference
+
+```{r aldex2_plots_median, message=FALSE, echo=FALSE, warning=FALSE}
+aldex.plot(vdr_all, type="MW", test="welch",cutoff=0.15, all.cex=0.7,called.cex=1.1, rare.col="black", called.col="red", lab='Welch’s t-test', xlab = 'Median Log2 Dispersion\nWelch’s t-test')
+aldex.plot(vdr_all, type="MW",test="wilcox", cutoff=0.15, all.cex=0.7, called.cex=1.1, rare.col="black", called.col="red", xlab = 'Median Log2 Dispersion\nWilcoxon rank sum test')
+#Effect Size and Effect Plot
+
+```
+
+### Effect and Volcano plots
+
+```{r aldex2_effect, message=FALSE, echo=FALSE, warning=FALSE}
+plot(vdr_all$effect, vdr_all$wi.ep, log="y", pch=19, main="Effect",cex=0.5, xlab="Effect size", ylab="Expected P value of Wilcoxon rank test")
+abline(h=0.05, lty=2,lwd=3, col ='red')
+plot(vdr_all$diff.btw, vdr_all$wi.ep, log="y", pch=19,main="Volcano", cex=0.5, xlab="Difference", ylab="Expected P value of Wilcoxon rank test")
+abline(h=0.05, lty=2,lwd=3, col='red')
+
+```
